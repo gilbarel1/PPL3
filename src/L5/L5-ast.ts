@@ -5,15 +5,15 @@
 
 import { join, map, zipWith } from "ramda";
 import { Sexp, Token } from 's-expression';
-import { isCompoundSExp, isEmptySExp, isSymbolSExp, makeCompoundSExp, makeEmptySExp, makeSymbolSExp, SExpValue, valueToString } from './L5-value';
-import { isTVar, makeFreshTVar, parseTExp, unparseTExp, TExp } from './TExp';
-import { allT, first, rest, second, isEmpty, isNonEmptyList } from '../shared/list';
-import { parse as p, isToken, isSexpString } from "../shared/parser";
-import { Result, bind, makeFailure, mapResult, makeOk, mapv } from "../shared/result";
-import { isArray, isString, isNumericString, isIdentifier } from "../shared/type-predicates";
 import { format } from "../shared/format";
+import { allT, first, isEmpty, isNonEmptyList, rest, second } from '../shared/list';
+import { isSexpString, isToken, parse as p } from "../shared/parser";
+import { Result, bind, makeFailure, makeOk, mapResult, mapv } from "../shared/result";
+import { isArray, isIdentifier, isNumericString, isString } from "../shared/type-predicates";
+import { SExpValue, isCompoundSExp, isEmptySExp, isSymbolSExp, makeCompoundSExp, makeEmptySExp, makeSymbolSExp, valueToString } from './L5-value';
+import { TExp, isTVar, makeFreshTVar, parseTExp, unparseTExp } from './TExp';
 
-/*
+
 // =============================================================================
 // Examples of type annotated programs
 // (define [x : number] 5)
@@ -54,7 +54,7 @@ import { format } from "../shared/format";
 // <var-ref>  ::= an identifier token                / VarRef(var)
 // <var-decl> ::= an identifier token | (var : TExp) / VarDecl(var, TE: TExp) ##### L5
 // <sexp>     ::= symbol | number | bool | string | ( <sexp>* )               ##### L3
-*/
+
 
 // A value returned by parseL5
 export type Parsed = Exp | Program;
