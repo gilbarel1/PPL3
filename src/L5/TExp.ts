@@ -52,7 +52,7 @@ export type AtomicTExp = NumTExp | BoolTExp | StrTExp | VoidTExp | AnyTExp | Nev
 export const isAtomicTExp = (x: any): x is AtomicTExp =>
     isNumTExp(x) || isBoolTExp(x) || isStrTExp(x) || isVoidTExp(x) || isAnyTExp(x) || isNeverTExp(x);
 
-export type CompoundTExp = ProcTExp | TupleTExp | UnionTExp | InterTExp | DiffTExp;
+export type CompoundTExp = ProcTExp | TupleTExp | UnionTExp | InterTExp;
 export const isCompoundTExp = (x: any): x is CompoundTExp => isProcTExp(x) || isTupleTExp(x) || isUnionTExp(x);
 
 export type NonTupleTExp = AtomicTExp | ProcTExp | TVar | UnionTExp;
@@ -119,9 +119,33 @@ export const makeInterTExp = (tes: TExp[]): TExp =>
 export const isInterTExp = (x: any): x is InterTExp => x.tag === "InterTExp";
 
 export type DiffTExp = { tag: "DiffTExp"; components: TExp[]};
-export const makeDiffTExp = (tes: TExp[]): TExp =>
-    ({tag: "DiffTExp", components: tes});
-export const isDiffTExp = (x: any): x is DiffTExp => x.tag === "DiffTExp";
+
+
+// A function that takes two TExp (te1 and te2) and returns the set difference between them:
+// te1 - te2
+
+// For example:
+// te2 is a subset of te1:
+// te1 = {string}
+// te2 = {number}
+
+// te1 \ te2 = string
+
+// te1 = {string, number}
+// te2 = {string}
+// te1 \ te2 = {number}
+export const makeDiffTExp = (te1: TExp, te2: TExp): TExp =>
+
+    isNeverTExp(te1) ? makeNeverTExp() :
+    isNeverTExp(te2) ? te1 :
+    // te1 is a union
+    isUnionTExp(te1) ? makeUnionTExp(filter((te) => ! isSubType(te, te2), te1.components)) : 
+    // te2 is a union, if te1 is not a union, then te1 is a subset of te2
+    isUnionTExp(te2) ? makeNeverTExp() :
+    makeUnionTExp([te1]);
+
+
+
 
 // In the value constructor - make sure the invariants are satisfied
 // 1. All unions are flattened union(a, union(b, c)) => [a,b,c]
@@ -398,8 +422,6 @@ export const unparseTExp = (te: TExp): Result<string> => {
         isNeverTExp(x) ? makeOk('never') :
         isInterTExp(x) ? mapv(mapResult(unparseTExp, x.components), (componentTEs: string[]) => 
                                 `(inter ${componentTEs.join(' ')})`) :  
-        isDiffTExp(x) ? mapv(mapResult(unparseTExp, x.components), (componentTEs: string[]) => 
-                                `(diff ${componentTEs.join(' ')})`) :
         isUnionTExp(x) ? mapv(mapResult(unparseTExp, x.components), (componentTEs: string[]) => 
                                 parenthesizeUnion(componentTEs)) :
         isProcTExp(x) ? bind(unparseTuple(x.paramTEs), (paramTEs: string[]) =>
