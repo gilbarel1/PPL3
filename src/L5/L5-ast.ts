@@ -11,7 +11,8 @@ import { isSexpString, isToken, parse as p } from "../shared/parser";
 import { Result, bind, makeFailure, makeOk, mapResult, mapv } from "../shared/result";
 import { isArray, isIdentifier, isNumericString, isString } from "../shared/type-predicates";
 import { SExpValue, isCompoundSExp, isEmptySExp, isSymbolSExp, makeCompoundSExp, makeEmptySExp, makeSymbolSExp, valueToString } from './L5-value';
-import { TExp, isTVar, makeFreshTVar, parseTExp, unparseTExp } from './TExp';
+import { TExp, isTVar, makeBoolTExp, makeFreshTVar, parseTExp, unparseTExp } from './TExp';
+import { parse } from "path";
 
 
 // =============================================================================
@@ -127,7 +128,7 @@ export const makeIfExp = (test: CExp, then: CExp, alt: CExp): IfExp =>
     ({tag: "IfExp", test: test, then: then, alt: alt});
 export const isIfExp = (x: any): x is IfExp => x.tag === "IfExp";
 
-export type ProcExp = {tag: "ProcExp"; args: VarDecl[], body: CExp[]; returnTE: TExp }
+export type ProcExp = {tag: "ProcExp"; args: VarDecl[], body: CExp[]; returnTE: TExp; }
 export const makeProcExp = (args: VarDecl[], body: CExp[], returnTE: TExp): ProcExp =>
     ({tag: "ProcExp", args: args, body: body, returnTE: returnTE});
 export const isProcExp = (x: any): x is ProcExp => x.tag === "ProcExp";
@@ -253,9 +254,13 @@ const parseIfExp = (params: Sexp[]): Result<IfExp> =>
 const parseProcExp = (vars: Sexp, rest: Sexp[]): Result<ProcExp> => {
     if (isArray(vars)) {
         const args = mapResult(parseVarDecl, vars);
-        const body = mapResult(parseL5CExp, rest[0] === ":" ? rest.slice(2) : rest);
-        const returnTE = rest[0] === ":" ? parseTExp(rest[1]) : makeOk(makeFreshTVar());
-        return bind(args, (args: VarDecl[]) =>
+        const body = mapResult(parseL5CExp, rest[0] === ":" ? rest[1] === "is?" ? rest.slice(3) :
+                                rest.slice(2) : rest);
+        const returnTE = rest[0] === ":" ?
+                         rest[1] === "is?" ? parseTExp(rest.slice(1,3)) : 
+                         parseTExp(rest[1]) : 
+                         makeOk(makeFreshTVar());
+  return bind(args, (args: VarDecl[]) =>
                     bind(body, (body: CExp[]) =>
                         mapv(returnTE, (returnTE: TExp) =>
                             makeProcExp(args, body, returnTE))));

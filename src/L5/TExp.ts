@@ -8,7 +8,7 @@
 ;; <void-te>      ::= void     // void-te()
 ;; <any-te>       ::= any      // any-te()
 ;; <never-te>     ::= never    // never-te()
-;; <compound-te>  ::= <proc-te> | <tuple-te> | <union-te>
+;; <compound-te>  ::= <proc-te> | <tuple-te> | <union-te> | <inter-te> 
 ;; <non-tuple-te> ::= <atomic-te> | <proc-te> | <tvar>
 ;; <proc-te>      ::= [ <tuple-te> -> <non-tuple-te> ] // proc-te(param-tes: list(te), return-te: te)
 ;; <tuple-te>     ::= <non-empty-tuple-te> | <empty-te>
@@ -36,7 +36,7 @@
 ;; [union [T1 -> T1] [Empty -> T1]]
 */
 
-import { all, chain, concat, equals, filter, includes, map, sort, uniq, zip } from "ramda";
+import { all, chain, concat, equals, filter, includes, is, map, Pred, sort, uniq, zip } from "ramda";
 import { Sexp } from "s-expression";
 import { Box, makeBox, setBox, unbox } from '../shared/box';
 import { format } from "../shared/format";
@@ -52,7 +52,7 @@ export type AtomicTExp = NumTExp | BoolTExp | StrTExp | VoidTExp | AnyTExp | Nev
 export const isAtomicTExp = (x: any): x is AtomicTExp =>
     isNumTExp(x) || isBoolTExp(x) || isStrTExp(x) || isVoidTExp(x) || isAnyTExp(x) || isNeverTExp(x);
 
-export type CompoundTExp = ProcTExp | TupleTExp | UnionTExp | InterTExp;
+export type CompoundTExp = ProcTExp | TupleTExp | UnionTExp | InterTExp | PredTExp;
 export const isCompoundTExp = (x: any): x is CompoundTExp => isProcTExp(x) || isTupleTExp(x) || isUnionTExp(x);
 
 export type NonTupleTExp = AtomicTExp | ProcTExp | TVar | UnionTExp;
@@ -84,7 +84,6 @@ export const makeNeverTExp = (): NeverTExp => ({tag: "NeverTExp"});
 export const isNeverTExp = (x: any): x is NeverTExp => x.tag === "NeverTExp";
 
 
-
 // proc-te(param-tes: list(te), return-te: te)
 export type ProcTExp = { tag: "ProcTExp"; paramTEs: TExp[]; returnTE: TExp; };
 export const makeProcTExp = (paramTEs: TExp[], returnTE: TExp): ProcTExp =>
@@ -93,6 +92,10 @@ export const isProcTExp = (x: any): x is ProcTExp => x.tag === "ProcTExp";
 // Uniform access to all components of a ProcTExp
 export const procTExpComponents = (pt: ProcTExp): TExp[] =>
     [...pt.paramTEs, pt.returnTE];
+
+export type PredTExp = { tag: "PredTExp"; te: TExp; };
+export const makePredTExp = (te: TExp): PredTExp => ({tag: "PredTExp", te: te});
+export const isPredTExp = (x: any): x is PredTExp => x.tag === "PredTExp";
 
 export type TupleTExp = NonEmptyTupleTExp | EmptyTupleTExp;
 export const isTupleTExp = (x: any): x is TupleTExp =>
@@ -115,7 +118,7 @@ export const isUnionTExp = (x: any): x is UnionTExp => x.tag === "UnionTExp";
 
 export type InterTExp = { tag: "InterTExp"; components: TExp[]};
 export const makeInterTExp = (tes: TExp[]): TExp =>
-    ({tag: "InterTExp", components: tes});
+    dnf(normalizeInter(({tag: "InterTExp", components: flattenSortInter(tes)})));
 export const isInterTExp = (x: any): x is InterTExp => x.tag === "InterTExp";
 
 export type DiffTExp = { tag: "DiffTExp"; components: TExp[]};
@@ -136,14 +139,22 @@ export type DiffTExp = { tag: "DiffTExp"; components: TExp[]};
 // te1 \ te2 = {number}
 export const makeDiffTExp = (te1: TExp, te2: TExp): TExp =>
 
+    // follow the provided rule
+    isAnyTExp(te1) ? isAnyTExp(te2) ? makeNeverTExp() : makeAnyTExp() :
+
     isNeverTExp(te1) ? makeNeverTExp() :
     isNeverTExp(te2) ? te1 :
+
     // te1 is a union
     isUnionTExp(te1) ? makeUnionTExp(filter((te) => ! isSubType(te, te2), te1.components)) : 
     // te2 is a union, if te1 is not a union, then te1 is a subset of te2
-    isUnionTExp(te2) ? makeNeverTExp() :
-    makeUnionTExp([te1]);
+    isUnionTExp(te2) ? isSubType(te1, te2) ? makeNeverTExp() : te1 :
+    // te1 is an intersection
+    isInterTExp(te1) ? makeInterTExp(filter((te) => !isSubType(te, te2), te1.components)) :
+    // te2 is an intersection
+    isInterTExp(te2) ? isSubType(te1, te2) ? makeNeverTExp() : te1 :
 
+    equals(te1, te2) ? makeNeverTExp() : te1;
 
 
 
@@ -155,6 +166,9 @@ export const makeDiffTExp = (te1: TExp, te2: TExp): TExp =>
 const flattenSortUnion = (tes: TExp[]): TExp[] =>
     removeDuplicatesAndNever(sort(subTypeComparator, flattenUnion(tes)));
 
+const flattenSortInter = (tes: TExp[]): TExp[] =>
+    removeDuplicatesAndAny(sort(subTypeComparator, flattenInter(tes)));
+
 // In case there is only one component - remove the union wrapper.
 // (union) = never
 const normalizeUnion = (ute: UnionTExp): TExp =>
@@ -163,6 +177,12 @@ const normalizeUnion = (ute: UnionTExp): TExp =>
     (ute.components.length === 1) ? ute.components[0] :
     ute;
 
+const normalizeInter = (ite: InterTExp): TExp =>
+    isEmpty(ite.components) ? makeNeverTExp() :
+    includes(makeNeverTExp(), ite.components) ? makeNeverTExp() :
+    (ite.components.length === 1) ? ite.components[0] :
+    ite;
+
 // Flatten all union components into the result
 // and remove duplicates
 // [number, union(number, string)] => [number, string]
@@ -170,6 +190,12 @@ const flattenUnion = (tes: TExp[]): TExp[] =>
     (tes.length > 0) ? 
         isUnionTExp(tes[0]) ? [...tes[0].components, ...flattenUnion(tes.slice(1))] :
         [tes[0], ...flattenUnion(tes.slice(1))] :
+    [];
+
+const flattenInter = (tes: TExp[]): TExp[] =>
+    (tes.length > 0) ?
+        isInterTExp(tes[0]) ? [...tes[0].components, ...flattenInter(tes.slice(1))] :
+        [tes[0], ...flattenInter(tes.slice(1))] :
     [];
 
 // Comparator for sort function - return -1 if te1 < te2, 0 if equal, +1 if te1 > te2
@@ -201,7 +227,16 @@ const removeDuplicatesAndNever = (tes: TExp[]): TExp[] =>
     containsType(tes.slice(1), tes[0]) ? removeDuplicatesAndNever(tes.slice(1)) :
     isNeverTExp(tes[0]) ? removeDuplicatesAndNever(tes.slice(1)) :
     [tes[0], ...removeDuplicatesAndNever(tes.slice(1))];
+
+const removeDuplicatesAndAny = (tes: TExp[]): TExp[] =>
+    isEmpty(tes) ? tes :
+    containsExactType(tes.slice(1), tes[0]) ? removeDuplicatesAndAny(tes.slice(1)) :
+    isAnyTExp(tes[0]) ? removeDuplicatesAndAny(tes.slice(1)) :
+    [tes[0], ...removeDuplicatesAndAny(tes.slice(1))];
+
+    
 // L52 END
+
 
 
  
@@ -257,19 +292,44 @@ export const crossProduct = (ll1: TExp[][], ll2: TExp[][]): TExp[][] =>
             ll1).flat();
 
 // SubType comparator
-export const isSubType = (te1: TExp, te2: TExp): boolean =>
-    (isUnionTExp(te1) && isUnionTExp(te2)) ? isSubset(te1.components, te2.components) :
-    isUnionTExp(te2) ? containsType(te2.components, te1) :
-    (isProcTExp(te1) && isProcTExp(te2)) ? checkProcTExps(te1, te2) :
-    isTVar(te1) ? equals(te1, te2) :
-    isAtomicTExp(te1) ? equals(te1, te2) :
-    false;
+export const isSubType = (te1: TExp, te2: TExp): boolean => {
+    if (isUnionTExp(te1) && isUnionTExp(te2)) {
+        return isSubset(te1.components, te2.components);
+    } else if (isUnionTExp(te1) && isInterTExp(te2)) {
+        return te1.components.every((te) => isSubType(te, te2));
+    } else if (isInterTExp(te1) && isUnionTExp(te2)) {
+        return te1.components.some((te) => isSubType(te, te2));
+    } else if (isInterTExp(te1) && isInterTExp(te2)) {
+        return te1.components.every((te) => isSubType(te, te2));
+    } else if (isInterTExp(te1)) {
+        return te1.components.every((te) => isSubType(te, te2));
+    } else if (isUnionTExp(te2)) {
+        return containsType(te2.components, te1);
+    } else if (isInterTExp(te2)) {
+        return te2.components.every((te) => isSubType(te1, te));
+    } else if (isProcTExp(te1) && isProcTExp(te2)) {
+        return checkProcTExps(te1, te2);
+    } else if (isAnyTExp(te2)) {
+        return true;
+    } else if (isTVar(te1)) {
+        return equals(te1, te2);
+    } else if (isAtomicTExp(te1) && isAtomicTExp(te2)) {
+        return equals(te1, te2);
+    } else {
+        return false;
+    }
+};
 
 // True when te is in tes or is a subtype of one of the elements of tes
 export const containsType = (tes: TExp[], te: TExp): boolean =>
     isEmpty(tes) ? false :
     isSubType(te, tes[0]) ? true :
     containsType(tes.slice(1), te);
+
+export const containsExactType = (tes: TExp[], te: TExp): boolean =>
+    isEmpty(tes) ? false :
+    equals(te, tes[0]) ? true :
+    containsExactType(tes.slice(1), te);
 
 export const isSubset = (tes1: TExp[], tes2: TExp[]): boolean =>
     isEmpty(tes1) ? true :
@@ -350,18 +410,29 @@ export const parseTExp = (texp: Sexp): Result<TExp> =>
     (texp === "boolean") ? makeOk(makeBoolTExp()) :
     (texp === "void") ? makeOk(makeVoidTExp()) :
     (texp === "string") ? makeOk(makeStrTExp()) :
+    (texp === "any") ? makeOk(makeAnyTExp()) :
+    (texp === "never") ? makeOk(makeNeverTExp()) :
     isString(texp) ? makeOk(makeTVar(texp)) :
     isArray(texp) ? parseCompoundTExp(texp) :
     makeFailure(`Unexpected TExp - ${format(texp)}`);
 
 const parseCompoundTExp = (texps: Sexp[]): Result<TExp> =>
     (texps[0] === "union") ? parseUnionTExp(texps) :
+    (texps[0] === "inter") ? parseInterTExp(texps) :
+    (texps[0] === "is?") ? parsePredTExp(texps) :
     parseProcTExp(texps);
 
 // Expect (union texp1 ...)
 const parseUnionTExp = (texps: Sexp[]): Result<TExp> =>
     mapv(mapResult(parseTExp, texps.slice(1)),
          (tes: TExp[]) => makeUnionTExp(tes));
+
+const parseInterTExp = (texps: Sexp[]): Result<TExp> =>
+    mapv(mapResult(parseTExp, texps.slice(1)),
+         (tes: TExp[]) => makeInterTExp(tes));  
+
+const parsePredTExp = (texps: Sexp[]): Result<TExp> =>
+    bind(parseTExp(texps[1]), (te: TExp) => makeOk(makePredTExp(te)));
 
 /*
 ;; expected structure: (<params> -> <returnte>)
@@ -374,6 +445,10 @@ const parseProcTExp = (texps: Sexp[]): Result<ProcTExp> => {
            (pos === 0) ? makeFailure(`No param types in proc texp - ${format(texps)}`) :
            (pos === texps.length - 1) ? makeFailure(`No return type in proc texp - ${format(texps)}`) :
            (texps.slice(pos + 1).indexOf('->') > -1) ? makeFailure(`Only one -> allowed in a procexp - ${format(texps)}`) :
+           texps[pos + 1] === 'is?' ?
+           bind(parseTupleTExp(texps.slice(0, pos)), (args: TExp[]) =>
+            mapv(parseTExp(texps.slice(pos + 1, pos + 3)), (returnTE: TExp) =>
+                 makeProcTExp(args, returnTE))) :
            bind(parseTupleTExp(texps.slice(0, pos)), (args: TExp[]) =>
                mapv(parseTExp(texps[pos + 1]), (returnTE: TExp) =>
                     makeProcTExp(args, returnTE)));
@@ -412,6 +487,7 @@ export const unparseTExp = (te: TExp): Result<string> => {
         `(union ${tes[0]} ${parenthesizeUnion(tes.slice(1))})`
 
     const up = (x?: TExp): Result<string | string[]> =>
+        isPredTExp(x) ? makeOk(`(is? ${unparseTExp(x.te)})`):
         isNumTExp(x) ? makeOk('number') :
         isBoolTExp(x) ? makeOk('boolean') :
         isStrTExp(x) ? makeOk('string') :

@@ -4,11 +4,16 @@ import { equals, map, zipWith } from 'ramda';
 import { isAppExp, isBoolExp, isDefineExp, isIfExp, isLetrecExp, isLetExp, isNumExp,
          isPrimOp, isProcExp, isProgram, isStrExp, isVarRef, parseL5Exp, unparse,
          AppExp, BoolExp, DefineExp, Exp, IfExp, LetrecExp, LetExp, NumExp,
-         Parsed, PrimOp, ProcExp, Program, StrExp, parseL5Program } from "./L5-ast";
+         Parsed, PrimOp, ProcExp, Program, StrExp, parseL5Program, } from "./L5-ast";
 import { applyTEnv, makeEmptyTEnv, makeExtendTEnv, TEnv } from "./TEnv";
 import { isProcTExp, makeBoolTExp, makeNumTExp, makeProcTExp, makeStrTExp, makeVoidTExp,
          parseTE, unparseTExp, makeUnionTExp,
-         BoolTExp, NumTExp, StrTExp, TExp, VoidTExp, isSubType } from "./TExp";
+         BoolTExp, NumTExp, StrTExp, TExp, VoidTExp, isSubType, 
+         isPredTExp,
+         isBoolTExp,
+         isAnyTExp,
+         isTVar,
+         PredTExp} from "./TExp";
 import { isEmpty, allT, first, rest, NonEmptyList, List, isNonEmptyList } from '../shared/list';
 import { Result, makeFailure, bind, makeOk, zipWithResult, either } from '../shared/result';
 import { parse as p } from "../shared/parser";
@@ -27,6 +32,8 @@ import { format } from '../shared/format';
 // Union[TEs1] contains Union[TEs2] if Union[TEs1] contains all elements of Union[TEs2]
 export const checkCompatibleType = (te1: TExp, te2: TExp, exp: Exp): Result<true> =>
   isSubType(te1, te2) ? makeOk(true) :
+  isAnyTExp(te1) && isTVar(te2) ? makeOk(true) :
+  (isPredTExp(te2) && isBoolTExp(te1)) ? makeOk(true) :
   bind(unparseTExp(te1), (te1: string) =>
     bind(unparseTExp(te2), (te2: string) =>
         bind(unparse(exp), (exp: string) => 
@@ -141,15 +148,47 @@ export const typeofIfNormal = (ifExp: IfExp, tenv: TEnv): Result<TExp> => {
 };
 
 // L52 Structured methods
-const isTypePredApp = (e: Exp, tenv: TEnv): Result<{/* Add parameters */}> => {
+// const isTypePredApp = (e: Exp, tenv: TEnv): Result<PredTExp> => {
+//     if (! isAppExp(e)) return makeFailure("Not an application");
+//     if (! isVarRef(e.rator)) return makeFailure("Not a variable reference");
+// }
+const isTypePredApp = (e: Exp, tenv: TEnv): Result<TExp> => {
+    if (! isAppExp(e)) return makeFailure("Not an application");
+    if (! isVarRef(e.rator)) return makeFailure("Not a variable reference");
+    const ProcTExp = applyTEnv(tenv, e.rator.var);
+    if (ProcTExp.tag !== "Ok") return makeFailure("Not a procedure");
+    if (! isProcTExp(ProcTExp.value)) return makeFailure("Not a procedure");
+    if (! isPredTExp(ProcTExp.value.returnTE)) return makeFailure("Not a predicate");
+    return makeOk(ProcTExp.value.returnTE.te);
 }
+
+
+// export const typeofIf = (ifExp: IfExp, tenv: TEnv): Result<TExp> =>
+//     either(
+//         bind (isTypePredApp(ifExp.test, tenv), (te: TExp) => {
+//             isAppExp(ifExp.test) ? isVarRef(ifExp.test.rands[0]) ? makeExtendTEnv([ifExp.test.rands[0].var], [te], tenv) : tenv : tenv;}),
+//             makeOk(makeUnionTExp([]),
+//         _ => typeofIfNormal(ifExp, tenv)););
 
 export const typeofIf = (ifExp: IfExp, tenv: TEnv): Result<TExp> =>
     either(
-        bind (isTypePredApp(ifExp.test, tenv), ({/* Add parameter here */}) => {}),
-        makeOk,
+        isTypePredApp(ifExp.test, tenv),
+        (te: TExp) => {
+            if (isAppExp(ifExp.test)) {
+                if (isVarRef(ifExp.test.rands[0])) {
+                    const newTenv = makeExtendTEnv([ifExp.test.rands[0].var], [te], tenv);
+                    const thenTE = typeofExp(ifExp.then, newTenv);
+                    const altTE = typeofExp(ifExp.alt, tenv);
+                    return bind(thenTE, (thenTE: TExp) =>
+                                bind(altTE, (altTE: TExp) =>
+                                    makeOk(makeUnion(thenTE, altTE))));
+                }
+            }
+            return makeFailure("Not a type predicate");
+        },
         () => typeofIfNormal(ifExp, tenv));
-
+        
+    
 
 // Purpose: compute the type of a proc-exp
 // Typing rule:
